@@ -23,6 +23,10 @@ push notification on successful booking.
   plain text.
 - **LINE Messaging API (Push Message)** — called server-side, after the booking row is committed to
   the database, with the channel access token kept server-only in an env var.
+- **LINE Login (OpenID Connect)** — optional, additive on top of email/password. A logged-in user
+  can link their LINE account so booking notifications go to *them*, not just the admin. Kept as an
+  opt-in add-on rather than replacing email/password, since the brief explicitly allows any auth
+  method and the existing one is already implemented and tested.
 
 ## Project structure
 
@@ -31,18 +35,26 @@ app/
   actions/auth.ts        Server Actions: register, login, logout (thin wrappers)
   actions/bookings.ts     Server Actions: createBooking, cancelBooking (thin wrappers)
   login/, register/       Auth pages (client forms + useActionState)
-  bookings/                Protected page: list, create, cancel bookings
+  bookings/                Protected page: list, create, cancel bookings, LINE connect status
+  api/line/connect/        Route Handler: starts the LINE Login redirect
+  api/line/callback/        Route Handler: OAuth callback, saves the linked LINE userId
 lib/
   auth-service.ts          registerUser/loginUser — testable business logic, no Next APIs
   booking-service.ts        createBookingForUser/cancelBookingForUser — same
   db.ts                     Prisma client singleton
   session.ts                 JWT sign/verify + cookie helpers
   dal.ts                     verifySession()/getCurrentUser() — the "data access layer"
-  line.ts                     LINE push notification helper
+  line.ts                     LINE Messaging API push helper
+  line-login.ts               LINE Login (OIDC) authorize URL + token exchange/verification
 proxy.ts                     Route protection (Next 16's replacement for middleware.ts)
 prisma/schema.prisma         User, Booking models
 tests/                        Vitest suite (see Testing below)
 ```
+
+LINE Login uses plain Route Handlers (`app/api/line/*`) rather than Server Actions, because it's a
+GET-driven, redirect-based OAuth flow initiated by a link and completed by an external provider
+calling back with query params — the shape Route Handlers exist for, not the form-mutation shape
+Server Actions are built around.
 
 The Server Actions in `app/actions/` only handle web-specific concerns (reading `FormData`,
 session cookies, `redirect()`, cache revalidation, firing the LINE push). The actual rules —
@@ -95,7 +107,9 @@ free for anyone to rebook. Also covers the session JWT round-trip and tampering 
 | `DATABASE_URL` | Postgres connection string. Matches `docker-compose.yml` by default. |
 | `JWT_SECRET` | Random secret used to sign session JWTs. Generate with `openssl rand -base64 32`. |
 | `LINE_CHANNEL_ACCESS_TOKEN` | Long-lived channel access token for a LINE Messaging API channel (LINE Developers Console → your channel → Messaging API tab). |
-| `LINE_USER_ID` | The `userId` that should receive the push notification. Add your LINE Official Account as a friend, then grab your own `userId` (e.g. from a webhook log, or the "test" target in the Developers Console). |
+| `LINE_USER_ID` | The `userId` that should receive the admin push notification. Add your LINE Official Account as a friend, then grab your own `userId` (e.g. from a webhook log, or the "test" target in the Developers Console). |
+| `LINE_LOGIN_CHANNEL_ID` / `LINE_LOGIN_CHANNEL_SECRET` | From a LINE Login channel (LINE Developers Console). **Must be linked to the same LINE Official Account** as `LINE_CHANNEL_ACCESS_TOKEN` above, via the channel's "Linked LINE Official Account" setting — otherwise the `userId` LINE Login hands back lives in a different namespace than the Messaging API expects, and pushes to individual users fail silently. |
+| `LINE_LOGIN_REDIRECT_URI` | Must exactly match a Callback URL registered on the LINE Login channel, e.g. `http://localhost:3000/api/line/callback`. |
 
 ## Key design decisions
 
@@ -126,6 +140,19 @@ free for anyone to rebook. Also covers the session JWT round-trip and tampering 
 - **Timezone:** the `datetime-local` input and `new Date(...)` parsing assume the browser and server
   share a timezone. For a real product this would need an explicit timezone (store UTC, format in
   the user's locale).
+- **Two independent notification recipients, not one.** The brief says a notification "must be
+  sent to LINE when a booking succeeds" without saying to whom — a reasonable reading is "the admin
+  finds out," another is "the booker gets a receipt." Rather than pick one, `createBooking` and
+  `cancelBooking` send both: the fixed admin recipient (`LINE_USER_ID`) always, and the booking
+  owner's own `lineUserId` if they've linked their LINE account. Each is independent — the user
+  notification failing (or not existing) never affects the admin one or the booking itself.
+- **LINE Login is additive, not a replacement for email/password**, and the OAuth exchange is done
+  server-side with real verification, not trusted from the client: `lib/line-login.ts` verifies the
+  returned `id_token`'s signature against LINE's published JWKS, checks `iss`/`aud`, and the
+  callback route checks a `state` value round-tripped through an httpOnly cookie (CSRF protection)
+  and a `nonce` embedded in the token (replay protection) before ever writing `lineUserId` to the
+  database. A `lineUserId` already claimed by a different account is rejected rather than silently
+  reassigned.
 
 ## What's left unfinished
 
@@ -135,3 +162,5 @@ free for anyone to rebook. Also covers the session JWT round-trip and tampering 
 - Test coverage is at the service layer (business rules), not end-to-end through the HTTP/Server
   Action layer or the UI — those were verified manually during development instead.
 - Session JWTs can't be revoked before their 7-day expiry (no server-side session table/blocklist).
+- No "Disconnect LINE" action once linked (would just be clearing `lineUserId`, but wasn't wired up
+  to the UI).
