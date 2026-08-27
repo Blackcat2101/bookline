@@ -5,7 +5,10 @@ import { verifySession } from "@/lib/dal";
 import { sendLineMessage } from "@/lib/line";
 import { createBookingForUser, cancelBookingForUser } from "@/lib/booking-service";
 
-export type BookingFormState = { error: string } | { success: true } | undefined;
+export type BookingFormState =
+  | { error: string }
+  | { success: true; lineNotified: boolean }
+  | undefined;
 
 export async function createBooking(
   _prevState: BookingFormState,
@@ -24,14 +27,14 @@ export async function createBooking(
 
   revalidatePath("/bookings");
 
-  void sendLineMessage(
+  const lineNotified = await sendLineMessage(
     `New booking confirmed for ${result.userName} on ${result.startsAt.toLocaleString(
       "en-US",
       { dateStyle: "medium", timeStyle: "short" }
     )}${result.note ? `\nNote: ${result.note}` : ""}`
-  ).catch((err) => console.error("Failed to send LINE notification:", err));
+  );
 
-  return { success: true };
+  return { success: true, lineNotified };
 }
 
 export type CancelFormState = { error: string } | undefined;
@@ -55,7 +58,7 @@ export async function cancelBooking(
       "en-US",
       { dateStyle: "medium", timeStyle: "short" }
     )}`
-  ).catch((err) => console.error("Failed to send LINE notification:", err));
+  );
 
   return undefined;
 }
