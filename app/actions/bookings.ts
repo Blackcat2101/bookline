@@ -67,7 +67,7 @@ export async function cancelBooking(formData: FormData) {
 
   const booking = await prisma.booking.findUnique({
     where: { id: bookingId },
-    select: { userId: true },
+    select: { userId: true, startsAt: true, user: { select: { name: true } } },
   });
 
   if (!booking || booking.userId !== userId) {
@@ -76,4 +76,11 @@ export async function cancelBooking(formData: FormData) {
 
   await prisma.booking.delete({ where: { id: bookingId } });
   revalidatePath("/bookings");
+
+  void sendLineMessage(
+    `Booking cancelled for ${booking.user.name} on ${booking.startsAt.toLocaleString(
+      "en-US",
+      { dateStyle: "medium", timeStyle: "short" }
+    )}`
+  ).catch((err) => console.error("Failed to send LINE notification:", err));
 }
