@@ -111,7 +111,7 @@ export async function exchangeCodeForLineUserId(
   if (claims.nonce !== nonce) {
     throw new Error("LINE id_token nonce mismatch");
   }
-  if (!claims.sub) {
+  if (typeof claims.sub !== "string" || !claims.sub) {
     throw new Error("LINE id_token missing sub claim");
   }
 
