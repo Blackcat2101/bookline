@@ -1,36 +1,107 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# BookLine
 
-## Getting Started
+A take-home assignment: login, appointment booking with double-booking prevention, and a real LINE
+push notification on successful booking.
 
-First, run the development server:
+## Tech stack & why
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+- **Next.js 16 (App Router) + React 19** — already scaffolded in this repo, and its Server Actions
+  let forms mutate data directly on the server without hand-rolling a separate REST/JSON API. Fewer
+  moving parts for a 2-day build.
+- **PostgreSQL + Prisma** — a real relational database gives a `UNIQUE` constraint on the booking
+  slot "for free," which is the simplest and most reliable way to guarantee no double-booking, even
+  under concurrent requests (a race between two `SELECT`-then-`INSERT` calls in application code
+  would not be safe).
+- **jose (JWT) in an httpOnly cookie** — chosen over a database-backed session table for simplicity
+  and to avoid extra infra. The JWT payload only holds the user's id, is signed (not just encoded),
+  and the cookie is `httpOnly`, `sameSite: lax`, and `secure` in production, so it can't be read or
+  forged from client JS and isn't sent cross-site. The tradeoff versus DB sessions: a token can't be
+  revoked before it expires (7 days here). For this assignment's scope that tradeoff is acceptable;
+  a real product would likely reach for a maintained auth library (NextAuth/Better Auth) or add a
+  session table.
+- **bcryptjs** for password hashing (cost factor 10) — passwords are never stored or logged in
+  plain text.
+- **LINE Messaging API (Push Message)** — called server-side, after the booking row is committed to
+  the database, with the channel access token kept server-only in an env var.
+
+## Project structure
+
+```
+app/
+  actions/auth.ts       Server Actions: register, login, logout
+  actions/bookings.ts    Server Actions: createBooking, cancelBooking
+  login/, register/      Auth pages (client forms + useActionState)
+  bookings/               Protected page: list, create, cancel bookings
+lib/
+  db.ts                  Prisma client singleton
+  session.ts              JWT sign/verify + cookie helpers
+  dal.ts                  verifySession()/getCurrentUser() — the "data access layer"
+  line.ts                  LINE push notification helper
+proxy.ts                  Route protection (Next 16's replacement for middleware.ts)
+prisma/schema.prisma      User, Booking models
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Setup & run
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Prerequisites: Node 20+, Docker (for local Postgres) or any reachable Postgres instance.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm install
 
-## Learn More
+# start a local Postgres (see docker-compose.yml)
+docker compose up -d
 
-To learn more about Next.js, take a look at the following resources:
+# copy env vars and fill them in (see below)
+cp .env.example .env
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+# create the database schema
+npx prisma migrate dev --name init
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+npm run dev
+```
 
-## Deploy on Vercel
+Open http://localhost:3000 — it redirects to `/login`. Register an account, log in, and book a slot.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Environment variables
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+| Variable | Description |
+| --- | --- |
+| `DATABASE_URL` | Postgres connection string. Matches `docker-compose.yml` by default. |
+| `JWT_SECRET` | Random secret used to sign session JWTs. Generate with `openssl rand -base64 32`. |
+| `LINE_CHANNEL_ACCESS_TOKEN` | Long-lived channel access token for a LINE Messaging API channel (LINE Developers Console → your channel → Messaging API tab). |
+| `LINE_USER_ID` | The `userId` that should receive the push notification. Add your LINE Official Account as a friend, then grab your own `userId` (e.g. from a webhook log, or the "test" target in the Developers Console). |
+
+## Key design decisions
+
+- **Booking model is a single shared calendar.** `Booking.startsAt` has a database-level `UNIQUE`
+  constraint, so *any* user booking the same date/time as an existing booking gets rejected — this
+  is what the brief means by "prevent double-booking the same date/time slot," and enforcing it at
+  the DB layer (not just an application-level check-then-insert) avoids a race condition between two
+  simultaneous requests for the same slot.
+- **Cancelling deletes the row.** This keeps the unique constraint simple (a cancelled slot is
+  immediately free again) at the cost of not keeping a cancellation history. Given the brief's
+  "data structure is up to the candidate" and 2-day scope, I chose the simpler option.
+- **Route protection has two layers:** `proxy.ts` does an optimistic redirect for `/bookings` based
+  on the JWT cookie (fast, but only a UX nicety), and every Server Action independently calls
+  `verifySession()` before touching the database — so the real authorization check happens
+  server-side, next to the data, not just at the edge.
+- **Ownership check on cancel:** `cancelBooking` loads the booking, confirms `booking.userId` matches
+  the session's `userId`, and only then deletes — a user cannot cancel someone else's booking by
+  guessing/tampering with a booking id.
+- **LINE notification is best-effort, not transactional.** The booking is committed to the database
+  first; the LINE push is fired afterward and its failure is only logged, not surfaced as a booking
+  failure. This mirrors a hard requirement in the brief that a real send is required, while
+  guaranteeing the core booking flow doesn't break because of a third-party API problem — that
+  design tradeoff is intentional. (Proof of the notification firing: see the screenshot/clip
+  submitted alongside this repo.)
+- **Timezone:** the `datetime-local` input and `new Date(...)` parsing assume the browser and server
+  share a timezone. For a real product this would need an explicit timezone (store UTC, format in
+  the user's locale).
+
+## What's left unfinished
+
+- No password reset / email verification flow.
+- No pagination on the booking list (fine at this scale).
+- No rate limiting on login/register.
+- No tests were written given the 2-day timeframe; manual testing only.
+- Session JWTs can't be revoked before their 7-day expiry (no server-side session table/blocklist).
