@@ -17,6 +17,7 @@ model User {
   email        String    @unique
   passwordHash String
   name         String
+  lineUserId   String?   @unique
   createdAt    DateTime  @default(now())
   bookings     Booking[]
 }
