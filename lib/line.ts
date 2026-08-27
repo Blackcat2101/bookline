@@ -2,12 +2,11 @@ import "server-only";
 
 const LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push";
 
-export async function sendLineMessage(text: string): Promise<boolean> {
+export async function pushLineMessage(to: string, text: string): Promise<boolean> {
   const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
-  const to = process.env.LINE_USER_ID;
 
-  if (!token || !to) {
-    console.warn("LINE notification skipped: missing LINE env vars");
+  if (!token) {
+    console.warn("LINE notification skipped: missing LINE_CHANNEL_ACCESS_TOKEN");
     return false;
   }
 
@@ -35,4 +34,14 @@ export async function sendLineMessage(text: string): Promise<boolean> {
     console.error("Failed to send LINE notification:", err);
     return false;
   }
+}
+
+/** Notifies the fixed admin recipient (LINE_USER_ID). */
+export async function sendLineMessage(text: string): Promise<boolean> {
+  const to = process.env.LINE_USER_ID;
+  if (!to) {
+    console.warn("LINE notification skipped: missing LINE_USER_ID");
+    return false;
+  }
+  return pushLineMessage(to, text);
 }

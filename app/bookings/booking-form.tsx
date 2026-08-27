@@ -52,11 +52,20 @@ export function BookingForm() {
         </p>
       )}
       {state && "success" in state && (
-        <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700 sm:basis-full dark:bg-emerald-950/40 dark:text-emerald-400">
-          {state.lineNotified
-            ? "Booking confirmed. A LINE notification was sent."
-            : "Booking confirmed. (The LINE notification could not be sent.)"}
-        </p>
+        <div className="space-y-0.5 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700 sm:basis-full dark:bg-emerald-950/40 dark:text-emerald-400">
+          <p>
+            {state.adminNotified
+              ? "Booking confirmed. A LINE notification was sent."
+              : "Booking confirmed. (The LINE notification could not be sent.)"}
+          </p>
+          {state.userNotified !== null && (
+            <p className="text-xs opacity-80">
+              {state.userNotified
+                ? "You'll also get a confirmation on your own LINE."
+                : "We couldn't reach your linked LINE account."}
+            </p>
+          )}
+        </div>
       )}
     </form>
   );

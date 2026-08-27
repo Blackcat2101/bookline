@@ -1,7 +1,13 @@
 import { prisma } from "@/lib/db";
 
 export type CreateBookingResult =
-  | { ok: true; startsAt: Date; note: string | null; userName: string }
+  | {
+      ok: true;
+      startsAt: Date;
+      note: string | null;
+      userName: string;
+      userLineUserId: string | null;
+    }
   | { ok: false; error: string };
 
 export async function createBookingForUser(
@@ -21,12 +27,18 @@ export async function createBookingForUser(
   try {
     const user = await prisma.user.findUniqueOrThrow({
       where: { id: userId },
-      select: { name: true },
+      select: { name: true, lineUserId: true },
     });
     await prisma.booking.create({
       data: { startsAt, note: note || null, userId },
     });
-    return { ok: true, startsAt, note: note || null, userName: user.name };
+    return {
+      ok: true,
+      startsAt,
+      note: note || null,
+      userName: user.name,
+      userLineUserId: user.lineUserId,
+    };
   } catch (err: unknown) {
     if (
       err &&
@@ -41,7 +53,7 @@ export async function createBookingForUser(
 }
 
 export type CancelBookingResult =
-  | { ok: true; startsAt: Date; userName: string }
+  | { ok: true; startsAt: Date; userName: string; userLineUserId: string | null }
   | { ok: false; error: string };
 
 export async function cancelBookingForUser(
@@ -50,7 +62,11 @@ export async function cancelBookingForUser(
 ): Promise<CancelBookingResult> {
   const booking = await prisma.booking.findUnique({
     where: { id: bookingId },
-    select: { userId: true, startsAt: true, user: { select: { name: true } } },
+    select: {
+      userId: true,
+      startsAt: true,
+      user: { select: { name: true, lineUserId: true } },
+    },
   });
 
   if (!booking || booking.userId !== userId) {
@@ -58,5 +74,10 @@ export async function cancelBookingForUser(
   }
 
   await prisma.booking.delete({ where: { id: bookingId } });
-  return { ok: true, startsAt: booking.startsAt, userName: booking.user.name };
+  return {
+    ok: true,
+    startsAt: booking.startsAt,
+    userName: booking.user.name,
+    userLineUserId: booking.user.lineUserId,
+  };
 }

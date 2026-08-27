@@ -2,12 +2,12 @@
 
 import { revalidatePath } from "next/cache";
 import { verifySession } from "@/lib/dal";
-import { sendLineMessage } from "@/lib/line";
+import { pushLineMessage, sendLineMessage } from "@/lib/line";
 import { createBookingForUser, cancelBookingForUser } from "@/lib/booking-service";
 
 export type BookingFormState =
   | { error: string }
-  | { success: true; lineNotified: boolean }
+  | { success: true; adminNotified: boolean; userNotified: boolean | null }
   | undefined;
 
 export async function createBooking(
@@ -27,14 +27,25 @@ export async function createBooking(
 
   revalidatePath("/bookings");
 
-  const lineNotified = await sendLineMessage(
-    `New booking confirmed for ${result.userName} on ${result.startsAt.toLocaleString(
-      "en-US",
-      { dateStyle: "medium", timeStyle: "short" }
-    )}${result.note ? `\nNote: ${result.note}` : ""}`
+  const when = result.startsAt.toLocaleString("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+
+  const adminNotified = await sendLineMessage(
+    `New booking confirmed for ${result.userName} on ${when}${
+      result.note ? `\nNote: ${result.note}` : ""
+    }`
   );
 
-  return { success: true, lineNotified };
+  const userNotified = result.userLineUserId
+    ? await pushLineMessage(
+        result.userLineUserId,
+        `Your booking is confirmed for ${when}.${result.note ? `\nNote: ${result.note}` : ""}`
+      )
+    : null;
+
+  return { success: true, adminNotified, userNotified };
 }
 
 export type CancelFormState = { error: string } | undefined;
@@ -53,12 +64,16 @@ export async function cancelBooking(
 
   revalidatePath("/bookings");
 
-  void sendLineMessage(
-    `Booking cancelled for ${result.userName} on ${result.startsAt.toLocaleString(
-      "en-US",
-      { dateStyle: "medium", timeStyle: "short" }
-    )}`
-  );
+  const when = result.startsAt.toLocaleString("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+
+  void sendLineMessage(`Booking cancelled for ${result.userName} on ${when}`);
+
+  if (result.userLineUserId) {
+    void pushLineMessage(result.userLineUserId, `Your booking for ${when} has been cancelled.`);
+  }
 
   return undefined;
 }
