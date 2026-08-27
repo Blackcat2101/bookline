@@ -1,11 +1,8 @@
 import "server-only";
-import { createRemoteJWKSet, jwtVerify } from "jose";
 
 const AUTHORIZE_URL = "https://access.line.me/oauth2/v2.1/authorize";
 const TOKEN_URL = "https://api.line.me/oauth2/v2.1/token";
-const JWKS_URL = "https://api.line.me/oauth2/v2.1/certs";
-
-const jwks = createRemoteJWKSet(new URL(JWKS_URL));
+const VERIFY_URL = "https://api.line.me/oauth2/v2.1/verify";
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -42,13 +39,28 @@ export function buildLineLoginUrl(state: string, nonce: string): string {
   return `${AUTHORIZE_URL}?${params.toString()}`;
 }
 
+type LineIdTokenClaims = {
+  iss: string;
+  sub: string;
+  aud: string;
+  exp: number;
+  iat: number;
+  nonce?: string;
+  name?: string;
+};
+
 /**
  * Exchanges an OAuth authorization code for the caller's LINE user ID.
  *
- * The `sub` claim of the returned ID token only matches the Messaging API's
- * userId space if this LINE Login channel has been linked to the LINE
- * Official Account in the LINE Developers Console — otherwise it's a valid
- * but unrelated per-channel identifier and push messages to it will fail.
+ * LINE signs ID tokens with HS256 (a shared-secret algorithm keyed on the
+ * channel secret) rather than an algorithm a public JWKS can verify, so
+ * this calls LINE's own /oauth2/v2.1/verify endpoint instead of verifying
+ * the JWT locally — that's LINE's documented path, not a workaround.
+ *
+ * The `sub` claim only matches the Messaging API's userId space if this
+ * LINE Login channel has been linked to the LINE Official Account in the
+ * LINE Developers Console — otherwise it's a valid but unrelated
+ * per-channel identifier and push messages to it will fail.
  */
 export async function exchangeCodeForLineUserId(
   code: string,
@@ -58,7 +70,7 @@ export async function exchangeCodeForLineUserId(
   const clientSecret = requireEnv("LINE_LOGIN_CHANNEL_SECRET");
   const redirectUri = requireEnv("LINE_LOGIN_REDIRECT_URI");
 
-  const res = await fetch(TOKEN_URL, {
+  const tokenRes = await fetch(TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -70,27 +82,38 @@ export async function exchangeCodeForLineUserId(
     }),
   });
 
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`LINE token exchange failed (${res.status}): ${body}`);
+  if (!tokenRes.ok) {
+    const body = await tokenRes.text();
+    throw new Error(`LINE token exchange failed (${tokenRes.status}): ${body}`);
   }
 
-  const data = (await res.json()) as { id_token?: string };
-  if (!data.id_token) {
+  const tokenData = (await tokenRes.json()) as { id_token?: string };
+  if (!tokenData.id_token) {
     throw new Error("LINE token response did not include an id_token");
   }
 
-  const { payload } = await jwtVerify(data.id_token, jwks, {
-    issuer: "https://access.line.me",
-    audience: clientId,
+  const verifyRes = await fetch(VERIFY_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      id_token: tokenData.id_token,
+      client_id: clientId,
+    }),
   });
 
-  if (payload.nonce !== nonce) {
+  if (!verifyRes.ok) {
+    const body = await verifyRes.text();
+    throw new Error(`LINE id_token verification failed (${verifyRes.status}): ${body}`);
+  }
+
+  const claims = (await verifyRes.json()) as LineIdTokenClaims;
+
+  if (claims.nonce !== nonce) {
     throw new Error("LINE id_token nonce mismatch");
   }
-  if (typeof payload.sub !== "string") {
+  if (!claims.sub) {
     throw new Error("LINE id_token missing sub claim");
   }
 
-  return payload.sub;
+  return claims.sub;
 }
