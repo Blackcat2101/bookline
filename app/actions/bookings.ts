@@ -1,9 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { prisma } from "@/lib/db";
 import { verifySession } from "@/lib/dal";
 import { sendLineMessage } from "@/lib/line";
+import { createBookingForUser, cancelBookingForUser } from "@/lib/booking-service";
 
 export type BookingFormState = { error: string } | { success: true } | undefined;
 
@@ -13,74 +13,49 @@ export async function createBooking(
 ): Promise<BookingFormState> {
   const { userId } = await verifySession();
 
-  const startsAtRaw = String(formData.get("startsAt") ?? "");
-  const note = String(formData.get("note") ?? "").trim();
+  const result = await createBookingForUser(userId, {
+    startsAtRaw: String(formData.get("startsAt") ?? ""),
+    note: String(formData.get("note") ?? ""),
+  });
 
-  const startsAt = new Date(startsAtRaw);
-  if (Number.isNaN(startsAt.getTime())) {
-    return { error: "Please choose a valid date and time." };
-  }
-  if (startsAt.getTime() <= Date.now()) {
-    return { error: "Please choose a time in the future." };
-  }
-
-  let user;
-  try {
-    user = await prisma.user.findUniqueOrThrow({
-      where: { id: userId },
-      select: { name: true },
-    });
-    await prisma.booking.create({
-      data: {
-        startsAt,
-        note: note || null,
-        userId,
-      },
-    });
-  } catch (err: unknown) {
-    if (
-      err &&
-      typeof err === "object" &&
-      "code" in err &&
-      (err as { code?: string }).code === "P2002"
-    ) {
-      return { error: "That time slot is already booked. Please pick another." };
-    }
-    throw err;
+  if (!result.ok) {
+    return { error: result.error };
   }
 
   revalidatePath("/bookings");
 
   void sendLineMessage(
-    `New booking confirmed for ${user.name} on ${startsAt.toLocaleString("en-US", {
-      dateStyle: "medium",
-      timeStyle: "short",
-    })}${note ? `\nNote: ${note}` : ""}`
+    `New booking confirmed for ${result.userName} on ${result.startsAt.toLocaleString(
+      "en-US",
+      { dateStyle: "medium", timeStyle: "short" }
+    )}${result.note ? `\nNote: ${result.note}` : ""}`
   ).catch((err) => console.error("Failed to send LINE notification:", err));
 
   return { success: true };
 }
 
-export async function cancelBooking(formData: FormData) {
+export type CancelFormState = { error: string } | undefined;
+
+export async function cancelBooking(
+  _prevState: CancelFormState,
+  formData: FormData
+): Promise<CancelFormState> {
   const { userId } = await verifySession();
   const bookingId = String(formData.get("bookingId") ?? "");
 
-  const booking = await prisma.booking.findUnique({
-    where: { id: bookingId },
-    select: { userId: true, startsAt: true, user: { select: { name: true } } },
-  });
-
-  if (!booking || booking.userId !== userId) {
-    throw new Error("Booking not found.");
+  const result = await cancelBookingForUser(userId, bookingId);
+  if (!result.ok) {
+    return { error: result.error };
   }
 
-  await prisma.booking.delete({ where: { id: bookingId } });
   revalidatePath("/bookings");
 
   void sendLineMessage(
-    `Booking cancelled for ${booking.user.name} on ${booking.startsAt.toLocaleString(
+    `Booking cancelled for ${result.userName} on ${result.startsAt.toLocaleString(
       "en-US",
       { dateStyle: "medium", timeStyle: "short" }
     )}`
   ).catch((err) => console.error("Failed to send LINE notification:", err));
+
+  return undefined;
 }
