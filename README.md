@@ -28,18 +28,27 @@ push notification on successful booking.
 
 ```
 app/
-  actions/auth.ts       Server Actions: register, login, logout
-  actions/bookings.ts    Server Actions: createBooking, cancelBooking
-  login/, register/      Auth pages (client forms + useActionState)
-  bookings/               Protected page: list, create, cancel bookings
+  actions/auth.ts        Server Actions: register, login, logout (thin wrappers)
+  actions/bookings.ts     Server Actions: createBooking, cancelBooking (thin wrappers)
+  login/, register/       Auth pages (client forms + useActionState)
+  bookings/                Protected page: list, create, cancel bookings
 lib/
-  db.ts                  Prisma client singleton
-  session.ts              JWT sign/verify + cookie helpers
-  dal.ts                  verifySession()/getCurrentUser() — the "data access layer"
-  line.ts                  LINE push notification helper
-proxy.ts                  Route protection (Next 16's replacement for middleware.ts)
-prisma/schema.prisma      User, Booking models
+  auth-service.ts          registerUser/loginUser — testable business logic, no Next APIs
+  booking-service.ts        createBookingForUser/cancelBookingForUser — same
+  db.ts                     Prisma client singleton
+  session.ts                 JWT sign/verify + cookie helpers
+  dal.ts                     verifySession()/getCurrentUser() — the "data access layer"
+  line.ts                     LINE push notification helper
+proxy.ts                     Route protection (Next 16's replacement for middleware.ts)
+prisma/schema.prisma         User, Booking models
+tests/                        Vitest suite (see Testing below)
 ```
+
+The Server Actions in `app/actions/` only handle web-specific concerns (reading `FormData`,
+session cookies, `redirect()`, cache revalidation, firing the LINE push). The actual rules —
+password hashing, duplicate-email checks, double-booking rejection, ownership checks — live in
+`lib/auth-service.ts` and `lib/booking-service.ts`, which depend on nothing but Prisma. That split
+is what makes them testable without spinning up a full Next.js request context.
 
 ## Setup & run
 
@@ -61,6 +70,23 @@ npm run dev
 ```
 
 Open http://localhost:3000 — it redirects to `/login`. Register an account, log in, and book a slot.
+
+## Testing
+
+```bash
+npm test
+```
+
+Runs the Vitest suite in `tests/` against a separate `bookline_test` database (created once with
+`docker exec <container> psql -U postgres -c "CREATE DATABASE bookline_test"`, connection string in
+`.env.test`). A Vitest global setup applies the Prisma migrations and truncates the tables before
+each run, so it's safe to re-run repeatedly and never touches your dev data in `bookline`.
+
+Covers the rules that actually matter for correctness and security: passwords are hashed and never
+stored in plain text, duplicate emails and short passwords are rejected, login gives the same
+generic error for a wrong password as for a nonexistent account, a slot can't be double-booked even
+across two different users, a user can't cancel someone else's booking, and a cancelled slot is
+free for anyone to rebook. Also covers the session JWT round-trip and tampering rejection.
 
 ## Environment variables
 
@@ -85,9 +111,11 @@ Open http://localhost:3000 — it redirects to `/login`. Register an account, lo
   on the JWT cookie (fast, but only a UX nicety), and every Server Action independently calls
   `verifySession()` before touching the database — so the real authorization check happens
   server-side, next to the data, not just at the edge.
-- **Ownership check on cancel:** `cancelBooking` loads the booking, confirms `booking.userId` matches
-  the session's `userId`, and only then deletes — a user cannot cancel someone else's booking by
-  guessing/tampering with a booking id.
+- **Ownership check on cancel:** `cancelBookingForUser` loads the booking, confirms `booking.userId`
+  matches the session's `userId`, and only then deletes — a user cannot cancel someone else's
+  booking by guessing/tampering with a booking id. Rather than throwing (which would render Next's
+  generic error page), it returns a typed result so the failure shows as an ordinary inline form
+  error, the same way a validation error does anywhere else in the app.
 - **LINE notification is best-effort, not transactional.** The booking is committed to the database
   first; the LINE push is fired afterward and its failure is only logged, not surfaced as a booking
   failure. This mirrors a hard requirement in the brief that a real send is required, while
@@ -103,5 +131,6 @@ Open http://localhost:3000 — it redirects to `/login`. Register an account, lo
 - No password reset / email verification flow.
 - No pagination on the booking list (fine at this scale).
 - No rate limiting on login/register.
-- No tests were written given the 2-day timeframe; manual testing only.
+- Test coverage is at the service layer (business rules), not end-to-end through the HTTP/Server
+  Action layer or the UI — those were verified manually during development instead.
 - Session JWTs can't be revoked before their 7-day expiry (no server-side session table/blocklist).
