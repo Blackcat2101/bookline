@@ -117,11 +117,12 @@ free for anyone to rebook. Also covers the session JWT round-trip and tampering 
   generic error page), it returns a typed result so the failure shows as an ordinary inline form
   error, the same way a validation error does anywhere else in the app.
 - **LINE notification is best-effort, not transactional.** The booking is committed to the database
-  first; the LINE push is fired afterward and its failure is only logged, not surfaced as a booking
-  failure. This mirrors a hard requirement in the brief that a real send is required, while
-  guaranteeing the core booking flow doesn't break because of a third-party API problem — that
-  design tradeoff is intentional. (Proof of the notification firing: see the screenshot/clip
-  submitted alongside this repo.)
+  first; the LINE push is fired afterward, and if it fails that's logged server-side rather than
+  rolling back the booking — a booking should never be lost because a third-party API had a bad
+  moment. On the create-booking path, `createBooking` does `await` the push (rather than fire-and-
+  forget) so the confirmation banner can honestly say whether the notification actually went out,
+  instead of unconditionally claiming success. (Proof of the notification firing: see the
+  screenshot/clip submitted alongside this repo.)
 - **Timezone:** the `datetime-local` input and `new Date(...)` parsing assume the browser and server
   share a timezone. For a real product this would need an explicit timezone (store UTC, format in
   the user's locale).
