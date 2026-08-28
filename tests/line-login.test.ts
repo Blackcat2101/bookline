@@ -42,6 +42,7 @@ describe("buildLineLoginUrl", () => {
     expect(url.searchParams.get("state")).toBe("state-abc");
     expect(url.searchParams.get("nonce")).toBe("nonce-xyz");
     expect(url.searchParams.get("scope")).toBe("openid profile");
+    expect(url.searchParams.get("bot_prompt")).toBe("normal");
   });
 
   it("throws if the channel id isn't configured", () => {

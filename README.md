@@ -147,12 +147,18 @@ free for anyone to rebook. Also covers the session JWT round-trip and tampering 
   owner's own `lineUserId` if they've linked their LINE account. Each is independent — the user
   notification failing (or not existing) never affects the admin one or the booking itself.
 - **LINE Login is additive, not a replacement for email/password**, and the OAuth exchange is done
-  server-side with real verification, not trusted from the client: `lib/line-login.ts` verifies the
-  returned `id_token`'s signature against LINE's published JWKS, checks `iss`/`aud`, and the
-  callback route checks a `state` value round-tripped through an httpOnly cookie (CSRF protection)
-  and a `nonce` embedded in the token (replay protection) before ever writing `lineUserId` to the
-  database. A `lineUserId` already claimed by a different account is rejected rather than silently
-  reassigned.
+  server-side with real verification, not trusted from the client: `lib/line-login.ts` posts the
+  returned `id_token` to LINE's own `/oauth2/v2.1/verify` endpoint (LINE signs ID tokens with
+  HS256 — a shared-secret algorithm a public JWKS can't verify, so this is LINE's documented path,
+  not a workaround for a bug), and the callback route checks a `state` value round-tripped through
+  an httpOnly cookie (CSRF protection) and a `nonce` embedded in the token (replay protection)
+  before ever writing `lineUserId` to the database. A `lineUserId` already claimed by a different
+  account is rejected rather than silently reassigned.
+- **The LINE Login authorize request sets `bot_prompt=normal`.** A push message to someone who
+  hasn't added the linked Official Account as a friend returns success from LINE's API but is
+  never actually delivered — found this the hard way testing from a second device. `bot_prompt`
+  folds "add BookLine as a friend" into the same LINE Login consent screen, so connecting and being
+  able to actually receive notifications happen in one step instead of two.
 
 ## What's left unfinished
 

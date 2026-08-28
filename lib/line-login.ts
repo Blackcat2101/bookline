@@ -34,6 +34,11 @@ export function buildLineLoginUrl(state: string, nonce: string): string {
     state,
     scope: "openid profile",
     nonce,
+    // Push messages silently go nowhere for a user who hasn't added the
+    // linked Official Account as a friend. bot_prompt asks them to do so
+    // as part of the same LINE Login consent screen, so "connected" and
+    // "can actually receive notifications" happen together.
+    bot_prompt: "normal",
   });
 
   return `${AUTHORIZE_URL}?${params.toString()}`;
