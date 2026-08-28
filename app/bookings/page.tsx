@@ -1,6 +1,7 @@
 import { verifySession, getCurrentUser } from "@/lib/dal";
 import { prisma } from "@/lib/db";
 import { logout } from "@/app/actions/auth";
+import { disconnectLine } from "@/app/actions/account";
 import { BookingForm } from "@/app/bookings/booking-form";
 import { CancelButton } from "@/app/bookings/cancel-button";
 import { isLineLoginConfigured } from "@/lib/line-login";
@@ -55,9 +56,19 @@ export default async function BookingsPage(props: PageProps<"/bookings">) {
       {(user?.lineUserId || lineLoginAvailable) && (
         <div className="flex items-center justify-between gap-4 rounded-2xl border border-black/10 bg-white/70 px-5 py-4 shadow-sm shadow-black/5 backdrop-blur-sm dark:border-white/10 dark:bg-white/5">
           {user?.lineUserId ? (
-            <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
-              ✓ LINE connected — you&apos;ll get your own booking notifications
-            </p>
+            <>
+              <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
+                ✓ LINE connected — you&apos;ll get your own booking notifications
+              </p>
+              <form action={disconnectLine}>
+                <button
+                  type="submit"
+                  className="shrink-0 rounded-lg border border-black/10 px-3 py-1.5 text-sm font-medium text-zinc-600 transition hover:bg-black/5 dark:border-white/15 dark:text-zinc-400 dark:hover:bg-white/5"
+                >
+                  Disconnect
+                </button>
+              </form>
+            </>
           ) : (
             <>
               <p className="text-sm text-zinc-600 dark:text-zinc-400">
